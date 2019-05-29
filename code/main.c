@@ -1,8 +1,8 @@
 /*--------------------------------------------------------------------------------------
 @file:    IAP_Serial
-@version: V1.02
+@version: V1.03
 @author:  dong
-@data:    2019_04_24
+@data:    2019_05_29
 @Introduction : Unlock flash   load_app from serial 
 --------------------------------------------------------------------------------------*/
 #include "usart.h"   
@@ -64,6 +64,8 @@ u32 delay;
 #define LED_blue()	
 #define LED_pink()	
 #define LED_OFF()	
+#define GPIO_Boot  		GPIOB
+#define GPIO_BootPin  	GPIO_Pin_4
 #else 
 #define PowerSupply_On() {GPIO_SetBits(GPIOD,GPIO_Pin_5);}		//MCU_SYSTEM
 #define PowerSupply_Off() {GPIO_ResetBits(GPIOD,GPIO_Pin_5);}
@@ -71,6 +73,8 @@ u32 delay;
 #define LED_blue()	{GPIO_SetBits(GPIOA,GPIO_Pin_0);GPIO_ResetBits(GPIOA,GPIO_Pin_1);}
 #define LED_pink()	{GPIO_SetBits(GPIOA,GPIO_Pin_1|GPIO_Pin_1);}
 #define LED_OFF()	{GPIO_ResetBits(GPIOA,GPIO_Pin_0|GPIO_Pin_1);}
+#define GPIO_Boot  		GPIOB
+#define GPIO_BootPin  	GPIO_Pin_4
 #endif
 
 int fputc(int ch, FILE *f)
@@ -135,6 +139,12 @@ void initBord_GPIO(void)
 	GPIO_InitStructure.GPIO_Speed = GPIO_Speed_10MHz;
 	GPIO_Init(GPIOD, &GPIO_InitStructure);
 	GPIO_ResetBits(GPIOD,GPIO_Pin_5);
+#endif
+#ifdef GPIO_BootPin
+	GPIO_InitStructure.GPIO_Pin = GPIO_BootPin; 
+	GPIO_InitStructure.GPIO_Mode = GPIO_Mode_IPD;
+	GPIO_InitStructure.GPIO_Speed = GPIO_Speed_10MHz;
+	GPIO_Init(GPIO_Boot, &GPIO_InitStructure);
 #endif
 	}
 
@@ -348,16 +358,28 @@ int main(void)
 	initBord_GPIO();
 	uart_init(115200);
 	USART_ClearFlag(USARTx, USART_FLAG_RXNE | USART_FLAG_ORE);
-	retry:
-	printf("\r\n Bootloader V1.02 \r\n");
-	LED_blue();
+	printf("\r\n Bootloader V1.03 \r\n");
 	USART_RX_STA=0; 		//接收状态标记	  
 	USART_RX_CNT=0; 		//接收的字节数
+	delay = TIME_100ms/10;
+	while(delay--);
+#ifdef GPIO_BootPin
+	if((GPIO_Boot ->IDR & GPIO_BootPin)==0)Jumpto_APP();
+#endif
+	LED_blue();
+	retry:
+#ifdef GPIO_BootPin
+	delay = TIME_WAIT*10;
+#else
 	delay = TIME_WAIT;
+#endif
 	while(delay)
 		{
-		USART_rx();
 		delay--;
+#ifdef GPIO_BootPin
+		if((GPIO_Boot ->IDR & GPIO_BootPin)==0)break;
+#endif
+		USART_rx();
 		}
 	Jumpto_APP();
 	delay = TIME_100ms;
