@@ -11,14 +11,22 @@
 #include "iap.h"  
 #include <stdio.h> 
 
-#define REMOTE  /* default DOGG*/
+//#define REMOTE  /* default DOGG*/
+
 
 // 最少要多留2页空间用于存放SN等数据,程序空间必须位于页面开始位置。
-#define BOOT_SIZE		0x8000	
+//#define BOOT_SIZE		0x8000	
+#define BOOT_SIZE		0x10000	
 
 //#define UART1
 //#define UART2
 #define UART3
+
+#define BT_TEST
+
+#define GPIO_Boot  		GPIOB
+#define GPIO_BootPin  	GPIO_Pin_4
+
 
 #define FLASH_APP1_ADDR		(0x08000000+BOOT_SIZE)	//第一个应用程序起始地址(存放在FLASH)
 
@@ -64,8 +72,6 @@ u32 delay;
 #define LED_blue()	
 #define LED_pink()	
 #define LED_OFF()	
-#define GPIO_Boot  		GPIOB
-#define GPIO_BootPin  	GPIO_Pin_4
 #else 
 #define PowerSupply_On() {GPIO_SetBits(GPIOD,GPIO_Pin_5);}		//MCU_SYSTEM
 #define PowerSupply_Off() {GPIO_ResetBits(GPIOD,GPIO_Pin_5);}
@@ -73,9 +79,16 @@ u32 delay;
 #define LED_blue()	{GPIO_SetBits(GPIOA,GPIO_Pin_0);GPIO_ResetBits(GPIOA,GPIO_Pin_1);}
 #define LED_pink()	{GPIO_SetBits(GPIOA,GPIO_Pin_1|GPIO_Pin_1);}
 #define LED_OFF()	{GPIO_ResetBits(GPIOA,GPIO_Pin_0|GPIO_Pin_1);}
-#define GPIO_Boot  		GPIOB
-#define GPIO_BootPin  	GPIO_Pin_4
 #endif
+
+#ifdef BOARD_V25
+#define CN3704
+#define PowerSwitch     (GPIO_ReadInputData(GPIOC)&GPIO_Pin_3)
+#else
+#define PowerSwitch     (GPIO_ReadInputData(GPIOB) & GPIO_Pin_1)
+#endif
+void Jumpto_APP(void);
+void MCU_upgrade(void) ;
 
 int fputc(int ch, FILE *f)
 	{ 	
@@ -139,6 +152,25 @@ void initBord_GPIO(void)
 	GPIO_InitStructure.GPIO_Speed = GPIO_Speed_10MHz;
 	GPIO_Init(GPIOD, &GPIO_InitStructure);
 	GPIO_ResetBits(GPIOD,GPIO_Pin_5);
+#ifdef BT_TEST
+	// key
+	GPIO_InitStructure.GPIO_Pin = GPIO_Pin_1; 
+	GPIO_InitStructure.GPIO_Mode = GPIO_Mode_IN_FLOATING;
+	GPIO_InitStructure.GPIO_Speed = GPIO_Speed_10MHz;
+	GPIO_Init(GPIOB, &GPIO_InitStructure);
+	// P2.0
+	GPIO_InitStructure.GPIO_Pin = GPIO_Pin_3; 
+	GPIO_InitStructure.GPIO_Mode = GPIO_Mode_Out_OD;
+	GPIO_InitStructure.GPIO_Speed = GPIO_Speed_10MHz;
+	GPIO_Init(GPIOB, &GPIO_InitStructure);
+	
+	GPIO_SetBits(GPIOB,GPIO_Pin_3);
+	GPIO_InitStructure.GPIO_Pin = GPIO_Pin_4 | GPIO_Pin_5; 
+	GPIO_InitStructure.GPIO_Mode = GPIO_Mode_Out_PP;
+	GPIO_InitStructure.GPIO_Speed = GPIO_Speed_10MHz;
+	GPIO_Init(GPIOB, &GPIO_InitStructure);
+	GPIO_ResetBits(GPIOB,GPIO_Pin_4 | GPIO_Pin_5);
+#endif
 #endif
 #ifdef GPIO_BootPin
 	GPIO_InitStructure.GPIO_Pin = GPIO_BootPin; 
@@ -148,6 +180,109 @@ void initBord_GPIO(void)
 #endif
 	}
 
+#ifdef BT_TEST
+void BT_testMode(void)
+	{
+	//printf("\r\n BlueTouth test mode \r\n");
+	PowerSupply_On();
+	GPIO_ResetBits(GPIOB,GPIO_Pin_3);//p2.1
+	GPIO_ResetBits(GPIOB,GPIO_Pin_4);//ean
+	GPIO_SetBits(GPIOB,GPIO_Pin_5);//Vbus
+	LED_blue();				
+	}
+
+void BT_upgradeMode(void)
+	{
+	//printf("\r\n BlueTouth upgrade mode \r\n");
+	PowerSupply_On();
+	GPIO_ResetBits(GPIOB,GPIO_Pin_3);//p2.1
+	GPIO_SetBits(GPIOB,GPIO_Pin_4);//ean
+	GPIO_SetBits(GPIOB,GPIO_Pin_5);//Vbus
+	LED_pink();				
+	}
+
+void Set_BT_TestMode(void)
+	{
+	u16 k0,k1,k2=0;
+	u8 mode=0;
+	u8 time_led,flag_led;;
+	u8 Res;
+	BT_testMode();
+	while (1)
+		{
+		delay = TIME_WAIT/100;
+		while(delay)
+			{
+			if(USART_GetFlagStatus(USART2, USART_FLAG_RXNE) != RESET)
+				{
+				USART_ClearFlag(USART2, USART_FLAG_RXNE | USART_FLAG_ORE);
+				Res = USART_ReceiveData(USART2);
+				while((USART3->SR & USART_FLAG_TC)==0);  
+				USART3->DR = (u8) Res;	   
+				}
+			if(USART_GetFlagStatus(USART3, USART_FLAG_RXNE) != RESET)
+				{
+				USART_ClearFlag(USART3, USART_FLAG_RXNE | USART_FLAG_ORE);
+				Res = USART_ReceiveData(USART3);
+				while((USART2->SR & USART_FLAG_TC)==0);  
+				USART2->DR = (u8) Res;	   
+				}
+			delay--;
+			}
+		if(++time_led >=25)
+			{
+			time_led = 0;
+			if(flag_led)
+				{
+				flag_led = 0;
+				LED_OFF();
+				}
+			else
+				{
+				flag_led = 1;
+				if(mode ==0)
+					{
+					LED_pink();
+					}
+				else if(mode ==1)
+					{
+					LED_red();
+					}
+				else 
+					{
+					LED_blue();
+					}
+				}
+			}
+		///////
+		k0 = PowerSwitch;
+		if(k0 != k1)
+			{
+			k1=k0;
+			}
+		else if(k0 != k2)
+			{
+			if(k2 ==0)
+				{
+				if(++mode >= 2)
+					{
+					mode = 0;
+					MCU_upgrade();
+					}
+				else if(mode)
+					{
+					BT_testMode();
+					}
+				else
+					{
+					BT_upgradeMode();
+					}
+				}
+			k2 = k0;
+			}
+		}
+	}
+#endif
 
 u8 USART_RX_BUF[USART_REC_LEN] __attribute__ ((at(0X20001000)));//接收缓冲,最大USART_REC_LEN个字节,起始地址为0X20001000.    //接收状态
 
@@ -242,6 +377,48 @@ void uart_init(u32 bound)
 	USART_InitStructure.USART_Mode = USART_Mode_Rx | USART_Mode_Tx;
 	USART_Init(USARTx, &USART_InitStructure); 
 	USART_Cmd(USARTx, ENABLE); 
+
+	
+}
+
+void uart2_uart3_init(u32 bound)
+	{
+	GPIO_InitTypeDef GPIO_InitStructure;
+	USART_InitTypeDef USART_InitStructure;
+
+	
+	RCC_AHBPeriphClockCmd(RCC_APB2Periph_GPIOA,ENABLE); 
+	RCC_APB1PeriphClockCmd(RCC_APB1Periph_USART2,ENABLE);
+	
+	RCC_AHBPeriphClockCmd(RCC_APB2Periph_GPIOB,ENABLE); 
+	RCC_APB1PeriphClockCmd(RCC_APB1Periph_USART3,ENABLE);
+	
+	GPIO_InitStructure.GPIO_Pin = GPIO_Pin_2;
+	GPIO_InitStructure.GPIO_Mode = GPIO_Mode_AF_PP;
+	GPIO_InitStructure.GPIO_Speed = GPIO_Speed_50MHz;
+	GPIO_Init(GPIOA, &GPIO_InitStructure);	  
+	GPIO_InitStructure.GPIO_Pin = GPIO_Pin_3;
+	GPIO_InitStructure.GPIO_Mode = GPIO_Mode_IPU;
+	GPIO_Init(GPIOA, &GPIO_InitStructure);
+	
+	GPIO_InitStructure.GPIO_Pin = GPIO_Pin_10;
+	GPIO_InitStructure.GPIO_Mode = GPIO_Mode_AF_PP;
+	GPIO_InitStructure.GPIO_Speed = GPIO_Speed_50MHz;
+	GPIO_Init(GPIOB, &GPIO_InitStructure);	  
+	GPIO_InitStructure.GPIO_Pin = GPIO_Pin_11;
+	GPIO_InitStructure.GPIO_Mode = GPIO_Mode_IPU;
+	GPIO_Init(GPIOB, &GPIO_InitStructure);
+	
+	USART_InitStructure.USART_BaudRate = bound;
+	USART_InitStructure.USART_WordLength = USART_WordLength_8b;
+	USART_InitStructure.USART_StopBits = USART_StopBits_1;
+	USART_InitStructure.USART_Parity = USART_Parity_No;
+	USART_InitStructure.USART_HardwareFlowControl = USART_HardwareFlowControl_None;
+	USART_InitStructure.USART_Mode = USART_Mode_Rx | USART_Mode_Tx;
+	USART_Init(USART2, &USART_InitStructure); 
+	USART_Init(USART3, &USART_InitStructure); 
+	USART_Cmd(USART2, ENABLE); 
+	USART_Cmd(USART3, ENABLE); 
 }
 
 ErrorStatus verify(u32  addr, u8 * BinBuf, u16 datalength)
@@ -254,7 +431,7 @@ ErrorStatus verify(u32  addr, u8 * BinBuf, u16 datalength)
 	return SUCCESS;
 	}
 
-void USART_rx(void)              
+void MCU_upgrade(void)              
 {
 	u8 Res;	
 	if(USART_GetFlagStatus(USARTx, USART_FLAG_RXNE) != RESET)
@@ -356,9 +533,33 @@ int main(void)
 	{
 	RCC_Configuration();
 	initBord_GPIO();
-	uart_init(115200);
-	USART_ClearFlag(USARTx, USART_FLAG_RXNE | USART_FLAG_ORE);
-	printf("\r\n Bootloader V1.03 \r\n");
+#ifdef GPIO_BootPin
+	if((GPIO_Boot ->IDR & GPIO_BootPin)==0)Jumpto_APP();
+#endif
+#ifndef REMOTE
+	delay = TIME_100ms;
+	while(delay--);
+	if(PowerSwitch ==0)//key
+		{
+		uart2_uart3_init(115200);
+		Set_BT_TestMode();
+		}
+#endif
+#ifdef GPIO_BootPin
+	if((GPIO_Boot ->IDR & GPIO_BootPin)==0)Jumpto_APP();
+#endif
+#ifndef REMOTE
+	delay = TIME_100ms;
+	while(delay--);
+	if(PowerSwitch ==0)//key
+		{
+		uart2_uart3_init(115200);
+		Set_BT_TestMode();
+		}
+#endif
+	////////////
+	uart_init(115200);	USART_ClearFlag(USARTx, USART_FLAG_RXNE | USART_FLAG_ORE);
+	printf("\r\n Bootloader V2.01 \r\n");
 	USART_RX_STA=0; 		//接收状态标记	  
 	USART_RX_CNT=0; 		//接收的字节数
 	delay = TIME_100ms/10;
@@ -369,17 +570,14 @@ int main(void)
 	LED_blue();
 	retry:
 #ifdef GPIO_BootPin
-	delay = TIME_WAIT*10;
+	delay = TIME_WAIT*15;
 #else
 	delay = TIME_WAIT;
 #endif
 	while(delay)
 		{
 		delay--;
-#ifdef GPIO_BootPin
-		if((GPIO_Boot ->IDR & GPIO_BootPin)==0)break;
-#endif
-		USART_rx();
+		MCU_upgrade();
 		}
 	Jumpto_APP();
 	delay = TIME_100ms;
